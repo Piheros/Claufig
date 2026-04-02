@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+.next/
+
+# Environment — never commit your API keys
+.env.local
+.env*.local
+
+# Claude Code output
+spec-to-figma-output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
