@@ -91,6 +91,6 @@ No `.env.local` needed — Claufig uses your Claude Code OAuth session directly.
 
 ## Built by
 
-[Pierre Pavlovic](https://linkedin.com/in/pierrepavlovic) · Onepoint Agentic Studio
+[Pierre Pavlovic](https://linkedin.com/in/pierrepavlovic)
 
 Feel free to open issues or PRs.
