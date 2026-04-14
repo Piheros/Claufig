@@ -26,10 +26,28 @@ function findClaude(): string {
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const specs: { id: string; label: string; spec: string }[] = body.specs || [{ id: 'page1', label: 'Page', spec: body.spec }]
+  const rawSpecs: { id: string; label: string; spec: string; variations?: number }[] = body.specs || [{ id: 'page1', label: 'Page', spec: body.spec }]
   const dsLink: string = body.figmaLink
-  const figmaTeam: string = body.figmaTeam || ''
+  const figmaTeamId: string = body.figmaTeamId || process.env.FIGMA_TEAM_ID || ''
+  const targetFileKey: string = body.targetFileKey || 'new'
+  const isNewFile = targetFileKey === 'new'
   const isFigma = isFigmaFile(dsLink)
+
+  // Expand specs by variations: each screen becomes N frames with distinct design direction hints
+  const variantHints = [
+    'Layout A: default arrangement as described in the spec',
+    'Layout B: same visual style and components, but rearranged — e.g. swap sidebar/main positions, stack elements differently, move CTA to a different location. Keep the same design language.',
+    'Layout C: same visual style and components, but with a third spatial arrangement — experiment with hierarchy and whitespace distribution while keeping identical brand tokens.',
+  ]
+  const specs = rawSpecs.flatMap(s => {
+    const n = Math.min(Math.max(s.variations ?? 1, 1), 3)
+    if (n === 1) return [{ id: s.id, label: s.label, spec: s.spec }]
+    return Array.from({ length: n }, (_, i) => ({
+      id: `${s.id}_v${i + 1}`,
+      label: `${s.label} — v${i + 1}`,
+      spec: `${s.spec}\n\n[Variant ${i + 1}/${n}: ${variantHints[i] ?? variantHints[0]} — Do NOT change colors, typography or visual style. Only change the spatial layout and component arrangement.]`,
+    }))
+  })
 
   const workDir = path.join(os.homedir(), 'spec-to-figma-output', 'run-' + Date.now())
   fs.mkdirSync(workDir, { recursive: true })
@@ -47,9 +65,9 @@ ${isFigma
 }
 
 ## Figma output
-- Team: ${figmaTeam}
-- ALWAYS use planKey: "${figmaTeam}" when calling generate_figma_design — never ask which team, always use this one
-- Put all screens in the same Figma file named "Claufig — ${specs.map(s => s.label).join(' · ')}"
+- Target: ${isNewFile ? `New file in team ${figmaTeamId}` : `Existing file ${targetFileKey}`}
+- ALWAYS use outputMode: "${isNewFile ? 'newFile' : 'existingFile'}" when calling generate_figma_design.
+${isNewFile ? `- ALWAYS use planKey: "${figmaTeamId}" to specify the team.\n- Put all screens in a new Figma file named "Claufig — ${specs.map(s => s.label).join(' · ')}"` : `- ALWAYS use fileKey: "${targetFileKey}" to inject screens into the existing file.`}
 
 ## Your task
 Build ${specs.length} screen${specs.length > 1 ? 's' : ''} for a cohesive product. Generate them in sequence.
@@ -60,8 +78,10 @@ ${unifiedSpec}
 ## Rules
 - Use ONLY DS tokens — never hardcode hex or px values
 - Keep visual consistency across all screens
-- Push ALL screens to Figma using generate_figma_design with planKey: "${figmaTeam}"
-- NEVER ask which team — always use the planKey above
+- Push ALL screens to Figma using generate_figma_design
+- Use outputMode: "${isNewFile ? 'newFile' : 'existingFile'}"
+${isNewFile ? `- ALWAYS use planKey: "${figmaTeamId}"` : `- ALWAYS use fileKey: "${targetFileKey}"`}
+- NEVER ask which team or file — always use the exact keys provided above
 - Name each Figma frame exactly as the screen label above
 - Build a local HTML file per screen, serve with python3 http.server, then capture
 `
@@ -81,13 +101,13 @@ ${unifiedSpec}
     'For each screen:',
     '  a. Generate a standalone HTML file with DS tokens as CSS variables + Tailwind CDN',
     '  b. Start a python3 http.server on an available port',
-    '  c. Call generate_figma_design with outputMode "newFile" (first screen) or "existingFile" (subsequent screens)',
-    `  d. ALWAYS use planKey "${figmaTeam}" — do NOT ask which team, use this value directly`,
+    `  c. Call generate_figma_design with outputMode "${isNewFile ? 'newFile' : 'existingFile'}"`,
+    `  d. ${isNewFile ? `ALWAYS use planKey "${figmaTeamId}"` : `ALWAYS use fileKey "${targetFileKey}"`} — do NOT ask, use this value directly`,
     '  e. Name the frame exactly as the screen label',
     '',
     'Step 3: Output the Figma file URL and a token audit summary.',
     '',
-    `IMPORTANT: planKey is always "${figmaTeam}" — never prompt for team selection.`,
+    `IMPORTANT: Never prompt for team or file selection. Use the exact keys provided.`,
   ].join('\n')
 
   const promptFile = path.join(workDir, 'prompt.txt')
@@ -112,7 +132,7 @@ ${unifiedSpec}
         try { controller.close() } catch {}
       }
 
-      send('status', `Starting Claude Code — ${specs.length} screen${specs.length > 1 ? 's' : ''} · team ${figmaTeam}`)
+      send('status', `Starting Claude Code — ${specs.length} screen${specs.length > 1 ? 's' : ''}...`)
       send('log', `Claude: ${claudeBin}`)
 
       const cmd = `"${claudeBin}" --print --output-format stream-json --verbose --dangerously-skip-permissions < "${promptFile}"`
@@ -153,11 +173,36 @@ ${unifiedSpec}
               if (Array.isArray(content)) {
                 for (const block of content) {
                   if (block.type === 'text' && block.text) send('output', block.text)
-                  if (block.type === 'tool_use') send('tool', `→ ${block.name}(${JSON.stringify(block.input).slice(0, 100)}...)`)
+                  if (block.type === 'tool_use') {
+                    let inputStr = ''
+                    if (block.input && typeof block.input === 'object') {
+                      const { description, command, query, ...rest } = block.input as any
+                      const trunc = (s: string, max: number) => s.length > max ? s.slice(0, max) + '...' : s
+                      if (description) inputStr += `\n  Description : ${trunc(String(description), 200)}`
+                      if (command) inputStr += `\n  Command : ${trunc(String(command), 150)}`
+                      if (query) inputStr += `\n  Query : ${trunc(String(query), 150)}`
+                      if (Object.keys(rest).length > 0) inputStr += `\n  Args : ${trunc(JSON.stringify(rest), 200)}`
+                    } else {
+                      const str = JSON.stringify(block.input)
+                      inputStr = `\n  ${str.length > 200 ? str.slice(0, 200) + '...' : str}`
+                    }
+                    
+                    let toolType = 'tool'
+                    let emoji = '🛠️'
+                    if (block.name.includes('figma')) { toolType = 'tool_figma'; emoji = '🎨' }
+                    else if (/fetch|web|browser/i.test(block.name)) { toolType = 'tool_web'; emoji = '🌐' }
+                    else if (block.name.includes('claude') || block.name.includes('Bash') || block.name.includes('Todo') || block.name.includes('Write')) { toolType = 'tool_claude'; emoji = '🤖' }
+                    
+                    send(toolType, `→ ${emoji} ${block.name}${inputStr}`)
+                  }
                 }
               }
             }
-            if (parsed.type === 'tool_result') send('tool_result', `✓ ${String(parsed.content || '').slice(0, 120)}`)
+            if (parsed.type === 'tool_result') {
+              let resStr = typeof parsed.content === 'string' ? parsed.content : JSON.stringify(parsed.content, null, 2)
+              if (resStr.length > 2000) resStr = resStr.slice(0, 2000) + '\n... [truncated]'
+              send('tool_result', `✓ ${resStr}`)
+            }
             if (parsed.type === 'result') send('result', parsed.result || '')
           } catch {
             if (line.trim()) send('raw', line.trim())

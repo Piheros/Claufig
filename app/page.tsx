@@ -4,15 +4,15 @@ import { useState, useRef, useEffect } from 'react'
 
 const DEFAULT_SPECS = [
   {
-    id: 'page1', label: 'Gallery',
+    id: 'page1', label: 'Gallery', variations: 1,
     spec: `Main gallery page for an art painting e-commerce site. Hero with title "Original Works" and CTA. 3-column product grid with image, artwork title, artist name, price, "Limited Edition" badge. Horizontal filters: All / Painting / Photography / Drawing.`,
   },
   {
-    id: 'page2', label: 'Product',
+    id: 'page2', label: 'Product', variations: 1,
     spec: `Product page for a painting "Autumn Light" by Marie Dupont. Large image left, details right: title, artist, dimensions 60x80cm, price €380, authenticity badge. Format selector: Original / Numbered reproduction / Poster. Add to cart + Add to wishlist CTAs. Collapsible details section.`,
   },
   {
-    id: 'page3', label: 'Cart',
+    id: 'page3', label: 'Cart', variations: 1,
     spec: `Shopping cart with 2 items. Item rows: thumbnail, title, artist, format, price, remove button. Order summary panel: subtotal, shipping, total. Free shipping badge over €500. Checkout CTA. Secure payment + 14-day returns trust message.`,
   },
 ]
@@ -22,6 +22,9 @@ type DSMode = 'figma' | 'url'
 
 const termStyle: Record<string, string> = {
   tool:        'text-dim',
+  tool_figma:  'text-purple-400',
+  tool_web:    'text-blue-400',
+  tool_claude: 'text-amber-400',
   tool_result: 'text-secondary',
   output:      'text-text',
   error:       'text-red-400',
@@ -44,9 +47,32 @@ export default function Home() {
   const [done, setDone]           = useState(false)
   const [lines, setLines]         = useState<LogLine[]>([])
   const [started, setStarted]     = useState(false)
-  const [figmaTeam, setFigmaTeam]   = useState('')
+  const [targetFileKey, setTargetFileKey] = useState('new')
+  const [figmaFiles, setFigmaFiles] = useState<{key: string, name: string, projectName: string}[]>([])
+  const [loadingFiles, setLoadingFiles] = useState(true)
+  const [progress, setProgress] = useState(0)
+  const [statusText, setStatusText] = useState('Ready')
+  const [figmaUrl, setFigmaUrl] = useState('')
+  const [elapsed, setElapsed] = useState(0)
   const termRef  = useRef<HTMLDivElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const toolResultCountRef = useRef(0)
+  const startTimeRef = useRef<number>(0)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    async function loadFiles() {
+      try {
+        const res = await fetch('/api/figma/files', { method: 'POST' })
+        if (res.ok) {
+          const data = await res.json()
+          setFigmaFiles(data.files || [])
+        }
+      } catch (e) {}
+      finally { setLoadingFiles(false) }
+    }
+    loadFiles()
+  }, [])
 
   useEffect(() => {
     if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight
@@ -56,6 +82,20 @@ export default function Home() {
 
   async function generate() {
     if (running) return
+    // Compute total expected frames
+    const totalFrames = specs.reduce((acc, s) => acc + Math.min(Math.max(s.variations ?? 1, 1), 3), 0)
+    const stepsPerFrame = 6 // fetch, write, serve, capture, figma, result
+    const totalSteps = totalFrames * stepsPerFrame + 3
+    toolResultCountRef.current = 0
+    setProgress(0)
+    setStatusText('Starting...')
+    setFigmaUrl('')
+    setElapsed(0)
+    startTimeRef.current = Date.now()
+    if (timerRef.current) clearInterval(timerRef.current)
+    timerRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000))
+    }, 1000)
     setRunning(true); setDone(false); setLines([]); setStarted(true)
     const abort = new AbortController(); abortRef.current = abort
     const dsLink = dsMode === 'figma' ? figmaLink : dsUrl
@@ -66,7 +106,7 @@ export default function Home() {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ specs, figmaLink: dsLink, figmaTeam }),
+        body: JSON.stringify({ specs, figmaLink: dsLink, targetFileKey }),
         signal: abort.signal,
       })
       const reader = res.body!.getReader()
@@ -81,16 +121,38 @@ export default function Home() {
           try {
             const { type, data } = JSON.parse(line)
             addLine(type, data)
-            if (type === 'done') setDone(true)
+            if (type === 'done') { setDone(true); setProgress(100); setStatusText('Done') }
+            if (type === 'status') setStatusText(data)
+            if (type === 'output' || type === 'result') {
+              const match = data.match(/https:\/\/(?:www\.)?figma\.com\/(?:design|file)\/[\w-]+[^\s)]*/)
+              if (match) setFigmaUrl(match[0])
+            }
+            if (type === 'tool_result' || type === 'tool_figma' || type === 'tool_claude' || type === 'tool_web') {
+              toolResultCountRef.current += 1
+              const pct = Math.min(95, Math.round((toolResultCountRef.current / totalSteps) * 100))
+              setProgress(pct)
+            }
           } catch {}
         }
       }
     } catch (e: unknown) {
       if ((e as Error).name !== 'AbortError') addLine('error', String(e))
-    } finally { setRunning(false) }
+    } finally {
+      setRunning(false)
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+      if (!done) setStatusText('Stopped')
+    }
   }
 
-  function stop() { abortRef.current?.abort(); setRunning(false) }
+  function stop() {
+    abortRef.current?.abort()
+    setRunning(false)
+    setStatusText('Stopped')
+    setProgress(0)
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+  }
+
+  const formatTime = (s: number) => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
 
   function addSpec() {
     const id = `page${pageCounter++}`
@@ -108,13 +170,29 @@ export default function Home() {
     <div className="h-screen bg-bg flex flex-col overflow-hidden" style={{ fontFamily: 'Geist, sans-serif' }}>
 
       {/* Header */}
-      <header className="border-b border-border px-6 h-12 flex items-center justify-between flex-shrink-0">
+      <header className="border-b border-border px-6 h-12 flex items-center justify-between flex-shrink-0 relative overflow-hidden">
+        {/* Progress bar */}
+        {(running || done) && (
+          <div
+            className="absolute bottom-0 left-0 h-0.5 transition-all duration-500 ease-out"
+            style={{
+              width: `${progress}%`,
+              background: done ? '#ffffff' : 'linear-gradient(90deg, #6366f1, #a855f7, #ec4899)',
+              boxShadow: done ? 'none' : '0 0 8px #a855f7',
+            }}
+          />
+        )}
         <span className="text-sm font-medium text-text">Claufig</span>
-        <div className="flex items-center gap-2">
-          <span className={`w-1.5 h-1.5 rounded-full transition-colors ${running ? 'bg-white animate-pulse' : done ? 'bg-white' : 'bg-border'}`} />
-          <span className="text-xs text-muted">
-            {running ? `Generating ${specs.length} screen${specs.length > 1 ? 's' : ''}...` : done ? 'Done' : 'Ready'}
-          </span>
+        <div className="flex items-center gap-3">
+          {running && (
+            <span className="text-xs text-muted tabular-nums">{progress}% · {formatTime(elapsed)}</span>
+          )}
+          <div className="flex items-center gap-2">
+            <span className={`w-1.5 h-1.5 rounded-full transition-colors ${running ? 'bg-purple-400 animate-pulse' : done ? 'bg-white' : 'bg-border'}`} />
+            <span className="text-xs text-muted max-w-[200px] truncate">
+              {running ? statusText : done ? 'Done' : 'Ready'}
+            </span>
+          </div>
         </div>
       </header>
 
@@ -146,16 +224,20 @@ export default function Home() {
             </p>
           </div>
 
-          {/* Figma team */}
+          {/* Figma Target File */}
           <div className="p-4 border-b border-border">
-            <p className="text-xs text-muted uppercase tracking-widest mb-2">Figma Team</p>
-            <select
-              value={figmaTeam}
-              onChange={e => setFigmaTeam(e.target.value)}
-              disabled={running}
-              className="w-full bg-card text-text text-xs rounded border border-border px-3 py-2 focus:border-border-hi transition-colors disabled:opacity-40"
-            >
-              </select>
+            <p className="text-xs text-muted uppercase tracking-widest mb-2 mt-2">Target File</p>
+            <select value={targetFileKey} onChange={e => setTargetFileKey(e.target.value)} disabled={running || loadingFiles}
+              className="w-full bg-card text-text text-xs rounded border border-border px-3 py-2 focus:border-border-hi transition-colors disabled:opacity-40">
+              <option value="new">✨ Create a new file</option>
+              {loadingFiles ? (
+                <option disabled>Loading files...</option>
+              ) : (
+                figmaFiles.map(f => (
+                  <option key={f.key} value={f.key}>{f.projectName} / {f.name}</option>
+                ))
+              )}
+            </select>
           </div>
 
           {/* Screens */}
@@ -179,6 +261,22 @@ export default function Home() {
                   className="w-full bg-card text-secondary text-xs rounded border border-border p-2.5 resize-none leading-relaxed focus:border-border-hi focus:text-text transition-colors disabled:opacity-40 placeholder-muted"
                   placeholder="Describe the screen..."
                 />
+                <div className="flex items-center gap-2 mt-2">
+                  <span className="text-xs text-muted">Variants</span>
+                  <div className="flex gap-1">
+                    {[1, 2, 3].map(v => (
+                      <button key={v} onClick={() => updateSpec(s.id, 'variations', v)} disabled={running}
+                        className={`w-6 h-6 text-xs rounded border transition-colors disabled:opacity-40 ${
+                          (s.variations ?? 1) === v
+                            ? 'border-border-hi text-text bg-card'
+                            : 'border-border text-muted hover:border-border-md hover:text-secondary'
+                        }`}>
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+
+                </div>
               </div>
             ))}
             {!running && (
@@ -237,7 +335,14 @@ export default function Home() {
       {done && !running && (
         <div className="border-t border-border px-6 h-10 flex items-center justify-between flex-shrink-0 bg-panel">
           <span className="text-xs text-secondary">✓ {specs.length} frames in Figma</span>
-          <span className="text-xs text-muted">Open Figma to view your screens</span>
+          {figmaUrl ? (
+            <a href={figmaUrl} target="_blank" rel="noopener noreferrer"
+              className="text-xs text-muted hover:text-text transition-colors underline underline-offset-2">
+              Open Figma →
+            </a>
+          ) : (
+            <span className="text-xs text-muted">Open Figma to view your screens</span>
+          )}
         </div>
       )}
     </div>

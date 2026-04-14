@@ -8,6 +8,8 @@ node_modules/
 
 # Claude Code output
 spec-to-figma-output/
+prompt.txt
+temp_prompt.txt
 
 # OS
 .DS_Store
