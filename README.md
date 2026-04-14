@@ -26,12 +26,12 @@ No manual token copy-paste. No back-and-forth on DS compliance. N screens in one
 
 ## Features
 
-- 🎨 **Auto-load Figma files** — Your team's Figma files are listed automatically on startup via your Personal Access Token
-- 📁 **Target File picker** — Choose to inject screens into an existing Figma file, or create a brand new one
-- 🔀 **Layout Variants** — Generate 1, 2 or 3 spatial layout variants for each screen (same style, different component arrangement)
-- 📊 **Live progress bar** — Animated header progress bar with percentage and elapsed time
-- 🖥️ **Color-coded logs** — 🎨 Figma tool calls, 🌐 web fetches, 🤖 Claude commands each in a distinct color
-- 🔗 **Auto-link to Figma** — The output Figma URL is extracted from logs and shown as a clickable link when generation completes
+- Auto-load your Figma team files on startup (via Personal Access Token)
+- Target File picker — inject into an existing file or create a new one
+- Layout Variants — 1, 2 or 3 spatial variants per screen, same design tokens
+- Live progress bar with percentage and elapsed time
+- Color-coded logs by tool type (Figma, web, Claude)
+- Clickable Figma output link auto-detected from agent logs
 
 ---
 
