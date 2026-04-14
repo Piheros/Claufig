@@ -27,11 +27,14 @@ function findClaude(): string {
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const rawSpecs: { id: string; label: string; spec: string; variations?: number }[] = body.specs || [{ id: 'page1', label: 'Page', spec: body.spec }]
-  const dsLink: string = body.figmaLink
   const figmaTeamId: string = body.figmaTeamId || process.env.FIGMA_TEAM_ID || ''
   const targetFileKey: string = body.targetFileKey || 'new'
   const isNewFile = targetFileKey === 'new'
+  const dsLink: string = body.figmaLink
   const isFigma = isFigmaFile(dsLink)
+  const dsFileKeyMatch = dsLink.match(/figma\.com\/(?:design|file)\/([a-zA-Z0-9]+)/)
+  const dsFileKey = dsFileKeyMatch ? dsFileKeyMatch[1] : null
+  const generationMode: 'visual' | 'native' = body.generationMode || 'visual'
 
   // Expand specs by variations: each screen becomes N frames with distinct design direction hints
   const variantHints = [
@@ -56,8 +59,12 @@ export async function POST(req: NextRequest) {
     `## Screen ${i + 1}: ${s.label}\n\n${s.spec}`
   ).join('\n\n---\n\n')
 
-  const claudeMd = `# Claufig — Agent Rules
+  let claudeMd = ''
+  let promptStr = ''
 
+  if (generationMode === 'visual') {
+    claudeMd = `# Claufig — Agent Rules
+    
 ## Design system
 ${isFigma
     ? `Source: Figma file at ${dsLink}\nUse get_design_context and get_variable_defs to extract tokens.`
@@ -85,33 +92,84 @@ ${isNewFile ? `- ALWAYS use planKey: "${figmaTeamId}"` : `- ALWAYS use fileKey: 
 - Name each Figma frame exactly as the screen label above
 - Build a local HTML file per screen, serve with python3 http.server, then capture
 `
+
+    promptStr = [
+      'Read CLAUDE.md for full instructions.',
+      '',
+      isFigma
+        ? `Step 1: Call get_design_context with ${dsLink} then get_variable_defs to extract all DS tokens.`
+        : `Step 1: Fetch ${dsLink} (and sub-pages like /tokens/color, /tokens/spacing, /tokens/typography) to extract all DS tokens.`,
+      '',
+      `Step 2: Build ${specs.length} screen${specs.length > 1 ? 's' : ''} in sequence as described in CLAUDE.md.`,
+      'For each screen:',
+      '  a. Generate a standalone HTML file with DS tokens as CSS variables + Tailwind CDN',
+      '  b. Start a python3 http.server on an available port',
+      `  c. Call generate_figma_design with outputMode "${isNewFile ? 'newFile' : 'existingFile'}"`,
+      `  d. ${isNewFile ? `ALWAYS use planKey "${figmaTeamId}"` : `ALWAYS use fileKey "${targetFileKey}"`} — do NOT ask, use this value directly`,
+      '  e. Name the frame exactly as the screen label',
+      '',
+      'Step 3: Output the Figma file URL and a token audit summary.',
+      '',
+      `IMPORTANT: Never prompt for team or file selection. Use the exact keys provided.`,
+    ].join('\n')
+  } else {
+    // Native Mode
+    claudeMd = `# Claufig — Agent Rules (Native Component Mode)
+
+## Design system
+${!isFigma || !dsFileKey 
+  ? `ERROR: Native mode requires a valid Figma design system URL. This might fail. End.`
+  : `Source: Figma library file at ${dsLink} (File Key: ${dsFileKey})\nUse get_variable_defs on ${dsFileKey} to extract variables.\nUse search_design_system on ${dsFileKey} to find real component keys.`
+}
+
+## Figma output
+- Target: ${isNewFile ? `New file in team ${figmaTeamId}` : `Existing file ${targetFileKey}`}
+${isNewFile 
+  ? `- ALWAYS use create_new_file first with planKey: "${figmaTeamId}" and editorType: "design" to get a new fileKey.`
+  : `- You will use use_figma tool on the existing file: "${targetFileKey}".`}
+
+## Your task
+Build ${specs.length} screen${specs.length > 1 ? 's' : ''} using REAL Figma library components. Generate them in sequence.
+
+## Screens to build
+${unifiedSpec}
+
+## Rules
+- NEVER generate HTML. You must build layouts NATIVELY in Figma via the use_figma tool using the Plugin API JS context.
+- Step 1: Use search_design_system with fileKey: "${dsFileKey}" to discover component keys. (e.g. search for 'button', 'card')
+- Step 2: For each screen, write JavaScript to execute via use_figma on the target file.
+- The use_figma tool executes JS with access to \`figma\` global.
+- Use \`figma.importComponentByKeyAsync(key)\` and \`createInstance()\` to place components.
+- Use \`figma.createFrame()\` for the root screen. Name it exactly as the screen label.
+- Do NOT hardcode hex colors.
+- Step 3: After executing use_figma successfully for a screen, move on to the next.
+`
+
+    promptStr = [
+      'Read CLAUDE.md for full instructions on Native Component Mode.',
+      '',
+      isNewFile ? `Step 0: Call create_new_file with planKey "${figmaTeamId}" and editorType "design" to create the target file. Extract its fileKey.` : `Step 0: Your target fileKey is "${targetFileKey}".`,
+      '',
+      `Step 1: Call search_design_system on fileKey "${dsFileKey}" for components needed in the specs. Get component keys.`,
+      '',
+      `Step 2: Build ${specs.length} screen${specs.length > 1 ? 's' : ''} natively in Figma using use_figma tool on the target file.`,
+      `For each screen:`,
+      `  a. Write robust JS calling Figma Plugin API (importComponentByKeyAsync, createFrame, etc.)`,
+      `  b. Execute it via use_figma on the target file.`,
+      '',
+      'Step 3: Output the Figma file URL and a summary.',
+      '',
+      `IMPORTANT: Never prompt for team or file selection. Do everything autonomously.`,
+    ].join('\n')
+  }
+
   fs.writeFileSync(path.join(workDir, 'CLAUDE.md'), claudeMd)
 
   const mcp = { mcpServers: { figma: { type: 'http', url: 'https://mcp.figma.com/mcp' } } }
   fs.writeFileSync(path.join(workDir, '.mcp.json'), JSON.stringify(mcp, null, 2))
 
-  const prompt = [
-    'Read CLAUDE.md for full instructions.',
-    '',
-    isFigma
-      ? `Step 1: Call get_design_context with ${dsLink} then get_variable_defs to extract all DS tokens.`
-      : `Step 1: Fetch ${dsLink} (and sub-pages like /tokens/color, /tokens/spacing, /tokens/typography) to extract all DS tokens.`,
-    '',
-    `Step 2: Build ${specs.length} screen${specs.length > 1 ? 's' : ''} in sequence as described in CLAUDE.md.`,
-    'For each screen:',
-    '  a. Generate a standalone HTML file with DS tokens as CSS variables + Tailwind CDN',
-    '  b. Start a python3 http.server on an available port',
-    `  c. Call generate_figma_design with outputMode "${isNewFile ? 'newFile' : 'existingFile'}"`,
-    `  d. ${isNewFile ? `ALWAYS use planKey "${figmaTeamId}"` : `ALWAYS use fileKey "${targetFileKey}"`} — do NOT ask, use this value directly`,
-    '  e. Name the frame exactly as the screen label',
-    '',
-    'Step 3: Output the Figma file URL and a token audit summary.',
-    '',
-    `IMPORTANT: Never prompt for team or file selection. Use the exact keys provided.`,
-  ].join('\n')
-
   const promptFile = path.join(workDir, 'prompt.txt')
-  fs.writeFileSync(promptFile, prompt, 'utf8')
+  fs.writeFileSync(promptFile, promptStr, 'utf8')
 
   const claudeBin = findClaude()
   const encoder = new TextEncoder()

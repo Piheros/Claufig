@@ -54,6 +54,7 @@ export default function Home() {
   const [statusText, setStatusText] = useState('Ready')
   const [figmaUrl, setFigmaUrl] = useState('')
   const [elapsed, setElapsed] = useState(0)
+  const [generationMode, setGenerationMode] = useState<'visual' | 'native'>('visual')
   const termRef  = useRef<HTMLDivElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const toolResultCountRef = useRef(0)
@@ -82,10 +83,6 @@ export default function Home() {
 
   async function generate() {
     if (running) return
-    // Compute total expected frames
-    const totalFrames = specs.reduce((acc, s) => acc + Math.min(Math.max(s.variations ?? 1, 1), 3), 0)
-    const stepsPerFrame = 6 // fetch, write, serve, capture, figma, result
-    const totalSteps = totalFrames * stepsPerFrame + 3
     toolResultCountRef.current = 0
     setProgress(0)
     setStatusText('Starting...')
@@ -106,7 +103,7 @@ export default function Home() {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ specs, figmaLink: dsLink, targetFileKey }),
+        body: JSON.stringify({ specs, figmaLink: dsLink, targetFileKey, generationMode }),
         signal: abort.signal,
       })
       const reader = res.body!.getReader()
@@ -128,9 +125,7 @@ export default function Home() {
               if (match) setFigmaUrl(match[0])
             }
             if (type === 'tool_result' || type === 'tool_figma' || type === 'tool_claude' || type === 'tool_web') {
-              toolResultCountRef.current += 1
-              const pct = Math.min(95, Math.round((toolResultCountRef.current / totalSteps) * 100))
-              setProgress(pct)
+              setProgress(prev => Math.round(prev + (95 - prev) * 0.15))
             }
           } catch {}
         }
@@ -222,6 +217,23 @@ export default function Home() {
             <p className="text-xs text-muted mt-1.5">
               {dsMode === 'figma' ? 'Read via MCP Figma' : 'Fetched by Claude Code'}
             </p>
+
+            <div className="mt-4 pt-4 border-t border-border">
+              <p className="text-xs text-muted uppercase tracking-widest mb-2 mt-2">Mode</p>
+              <div className="flex gap-1">
+                <button onClick={() => setGenerationMode('visual')} disabled={running}
+                  className={`flex-1 py-1.5 text-xs rounded transition-colors ${generationMode === 'visual' ? 'bg-white text-black font-medium' : 'text-muted hover:text-text border border-border'}`}>
+                  Visual
+                </button>
+                <button onClick={() => setGenerationMode('native')} disabled={running}
+                  className={`flex-1 py-1.5 text-xs rounded transition-colors ${generationMode === 'native' ? 'bg-white text-black font-medium' : 'text-muted hover:text-text border border-border'}`}>
+                  Native
+                </button>
+              </div>
+              <p className="text-[10px] text-muted mt-1.5 leading-relaxed">
+                {generationMode === 'visual' ? 'Captures HTML renders. Works everywhere.' : 'Real components linked to DS via Figma Plugin API.'}
+              </p>
+            </div>
           </div>
 
           {/* Figma Target File */}
@@ -238,6 +250,11 @@ export default function Home() {
                 ))
               )}
             </select>
+            {generationMode === 'native' && targetFileKey === 'new' && (
+              <p className="text-[10px] text-amber-500 mt-2 leading-relaxed opacity-80">
+                Note: Claude will safely import and link your DS components! However, the library won't be automatically toggled "On" in your Figma Assets panel for manual drag-and-drop later. You can always turn it on yourself in Figma.
+              </p>
+            )}
           </div>
 
           {/* Screens */}

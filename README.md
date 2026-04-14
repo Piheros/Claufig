@@ -15,9 +15,9 @@ Claude Code (agent)
     ↓ reads Design System (Figma MCP or URL)
 DS tokens extracted (colors, spacing, typography)
     ↓
-HTML screens generated + served locally
+HTML screens generated (Visual Mode) OR JS script (Native Mode)
     ↓ Figma MCP
-Frames pushed to Figma (new file or existing)
+Frames pushed to Figma via generate_figma_design or use_figma
 ```
 
 No manual token copy-paste. No back-and-forth on DS compliance. N screens in one session for visual consistency.
@@ -26,6 +26,8 @@ No manual token copy-paste. No back-and-forth on DS compliance. N screens in one
 
 ## Features
 
+- **Visual Mode** — Captures HTML screenshots populated with your DS CSS variables (works with any docs URL)
+- **Native Mode** — Builds real Figma components linked to your published DS library via the Figma Plugin API
 - Auto-load your Figma team files on startup (via Personal Access Token)
 - Target File picker — inject into an existing file or create a new one
 - Layout Variants — 1, 2 or 3 spatial variants per screen, same design tokens
@@ -94,9 +96,10 @@ Open [http://localhost:3000](http://localhost:3000)
 
 1. **Design System** — paste a Figma file URL (`figma.com/design/...`) or a DS doc URL (e.g. `polaris-react.shopify.com`)
 2. **Target File** — the dropdown auto-loads your Figma team files. Choose an existing file to inject screens into, or select "Create a new file"
-3. **Screens** — describe each screen in plain language. Use the `1 / 2 / 3` buttons to generate multiple layout variants of the same screen
-4. **Generate** — Claude Code reads the DS, builds the HTML, captures each screen and pushes frames to Figma
-5. **Open Figma →** — once done, click the link in the footer to jump directly to your file
+3. **Mode** — switch between **Visual** (HTML render + capture) or **Native** (uses `figma.importComponentByKeyAsync()` to spawn real Figma library components)
+4. **Screens** — describe each screen in plain language. Use the `1 / 2 / 3` buttons to generate multiple layout variants of the same screen
+5. **Generate** — Claude Code reads the DS, builds the UI, and pushes frames to Figma
+6. **Open Figma →** — once done, click the link in the footer to jump directly to your file
 
 ---
 
