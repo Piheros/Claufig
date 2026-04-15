@@ -55,6 +55,8 @@ export default function Home() {
   const [figmaUrl, setFigmaUrl] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [generationMode, setGenerationMode] = useState<'visual' | 'native'>('visual')
+  const [generateSpecs, setGenerateSpecs] = useState(false)
+  const [workDir, setWorkDir] = useState<string | null>(null)
   const termRef  = useRef<HTMLDivElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const toolResultCountRef = useRef(0)
@@ -85,6 +87,7 @@ export default function Home() {
     if (running) return
     toolResultCountRef.current = 0
     setProgress(0)
+    setWorkDir(null)
     setStatusText('Starting...')
     setFigmaUrl('')
     setElapsed(0)
@@ -103,7 +106,7 @@ export default function Home() {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ specs, figmaLink: dsLink, targetFileKey, generationMode }),
+        body: JSON.stringify({ specs, figmaLink: dsLink, targetFileKey, generationMode, generateSpecs }),
         signal: abort.signal,
       })
       const reader = res.body!.getReader()
@@ -120,6 +123,7 @@ export default function Home() {
             addLine(type, data)
             if (type === 'done') { setDone(true); setProgress(100); setStatusText('Done') }
             if (type === 'status') setStatusText(data)
+            if (type === 'init') setWorkDir(data)
             if (type === 'output' || type === 'result') {
               const match = data.match(/https:\/\/(?:www\.)?figma\.com\/(?:design|file)\/[\w-]+[^\s)]*/)
               if (match) setFigmaUrl(match[0])
@@ -161,6 +165,9 @@ export default function Home() {
     setSpecs(p => p.map(s => s.id === id ? { ...s, [field]: val } : s))
   }
 
+  const totalFrames = specs.reduce((acc, s) => acc + (s.variations ?? 1), 0)
+  const summaryText = `1 Session · ${totalFrames} frame${totalFrames > 1 ? 's' : ''} (${specs.length} screen${specs.length > 1 ? 's' : ''}) · ${generationMode === 'native' ? 'Native' : 'Visual'}/${dsMode === 'figma' ? 'Figma' : 'URL'} · ${generateSpecs ? 'Specs' : 'No Docs'}`
+
   return (
     <div className="h-screen bg-bg flex flex-col overflow-hidden" style={{ fontFamily: 'Geist, sans-serif' }}>
 
@@ -200,8 +207,11 @@ export default function Home() {
           <div className="p-4 border-b border-border">
             <p className="text-xs text-muted uppercase tracking-widest mb-3">Design System</p>
             <div className="flex gap-1 mb-3">
-              {(['figma', 'url'] as DSMode[]).map(m => (
-                <button key={m} onClick={() => setDsMode(m)} disabled={running}
+              {(['figma', 'url'] as const).map(m => (
+                <button key={m} onClick={() => {
+                  setDsMode(m);
+                  if (m === 'url' && generationMode === 'native') setGenerationMode('visual')
+                }} disabled={running}
                   className={`flex-1 py-1.5 text-xs rounded transition-colors ${dsMode === m ? 'bg-white text-black font-medium' : 'text-muted hover:text-text border border-border'}`}>
                   {m === 'figma' ? 'Figma' : 'URL'}
                 </button>
@@ -225,13 +235,30 @@ export default function Home() {
                   className={`flex-1 py-1.5 text-xs rounded transition-colors ${generationMode === 'visual' ? 'bg-white text-black font-medium' : 'text-muted hover:text-text border border-border'}`}>
                   Visual
                 </button>
-                <button onClick={() => setGenerationMode('native')} disabled={running}
-                  className={`flex-1 py-1.5 text-xs rounded transition-colors ${generationMode === 'native' ? 'bg-white text-black font-medium' : 'text-muted hover:text-text border border-border'}`}>
+                <button onClick={() => setGenerationMode('native')} disabled={running || dsMode === 'url'}
+                  className={`flex-1 py-1.5 text-xs rounded transition-colors ${generationMode === 'native' ? 'bg-white text-black font-medium' : 'text-muted hover:text-text border border-border disabled:hover:text-muted disabled:opacity-40 disabled:cursor-not-allowed'}`}>
                   Native
                 </button>
               </div>
               <p className="text-[10px] text-muted mt-1.5 leading-relaxed">
                 {generationMode === 'visual' ? 'Captures HTML renders. Works everywhere.' : 'Real components linked to DS via Figma Plugin API.'}
+              </p>
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-border">
+              <p className="text-xs text-muted uppercase tracking-widest mb-2 mt-2">Documentation</p>
+              <div className="flex gap-1">
+                <button onClick={() => setGenerateSpecs(false)} disabled={running}
+                  className={`flex-1 py-1.5 text-xs rounded transition-colors ${!generateSpecs ? 'bg-white text-black font-medium' : 'text-muted hover:text-text border border-border'}`}>
+                  None
+                </button>
+                <button onClick={() => setGenerateSpecs(true)} disabled={running}
+                  className={`flex-1 py-1.5 text-xs rounded transition-colors ${generateSpecs ? 'bg-white text-black font-medium' : 'text-muted hover:text-text border border-border'}`}>
+                  Specs
+                </button>
+              </div>
+              <p className="text-[10px] text-muted mt-1.5 leading-relaxed">
+                {generateSpecs ? 'Produces functional specs (.md & .pdf).' : 'Only pushes UI frames to Figma.'}
               </p>
             </div>
           </div>
@@ -319,7 +346,7 @@ export default function Home() {
                 Stop
               </button>
             )}
-            <p className="text-xs text-border text-center">1 Claude Code session · {specs.length} screen{specs.length > 1 ? 's' : ''}</p>
+            <p className="text-xs text-border text-center">{summaryText}</p>
           </div>
         </aside>
 
@@ -328,7 +355,7 @@ export default function Home() {
           <div ref={termRef} className="flex-1 overflow-y-auto px-8 py-6 space-y-0.5" style={{ fontFamily: 'Geist Mono, monospace' }}>
             {!started && (
               <div className="h-full flex flex-col items-center justify-center gap-3 text-center" style={{ fontFamily: 'Geist, sans-serif' }}>
-                <p className="text-sm text-secondary">{specs.length} screen{specs.length > 1 ? 's' : ''} · 1 Claude Code session</p>
+                <p className="text-sm text-secondary">{summaryText}</p>
                 <p className="text-xs text-muted max-w-xs leading-relaxed">
                   Describe your screens on the left, then click Generate to build all frames in Figma.
                 </p>
@@ -351,7 +378,18 @@ export default function Home() {
 
       {done && !running && (
         <div className="border-t border-border px-6 h-10 flex items-center justify-between flex-shrink-0 bg-panel">
-          <span className="text-xs text-secondary">✓ {specs.length} frames in Figma</span>
+          <div className="flex items-center gap-4">
+            <span className="text-xs text-secondary">✓ {specs.length} frames in Figma</span>
+            {generateSpecs && workDir && (
+              <div className="flex items-center gap-3 border-l border-border border-opacity-50 pl-4">
+                <span className="text-[10px] text-muted tracking-widest uppercase">Specs:</span>
+                <a href={`/api/download?path=${encodeURIComponent(workDir + '/specifications.pdf')}`} 
+                   className="text-xs font-medium hover:text-secondary text-muted underline">↓ .pdf</a>
+                <a href={`/api/download?path=${encodeURIComponent(workDir + '/specifications.md')}`} 
+                   className="text-xs font-medium hover:text-secondary text-muted underline">↓ .md</a>
+              </div>
+            )}
+          </div>
           {figmaUrl ? (
             <a href={figmaUrl} target="_blank" rel="noopener noreferrer"
               className="text-xs text-muted hover:text-text transition-colors underline underline-offset-2">

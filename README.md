@@ -28,6 +28,7 @@ No manual token copy-paste. No back-and-forth on DS compliance. N screens in one
 
 - **Visual Mode** — Captures HTML screenshots populated with your DS CSS variables (works with any docs URL)
 - **Native Mode** — Builds real Figma components linked to your published DS library via the Figma Plugin API
+- **Generative Specifications** — auto-writes a detailed technical spec document (.md & .pdf) based on the generated design seamlessly using `md-to-pdf`
 - Auto-load your Figma team files on startup (via Personal Access Token)
 - Target File picker — inject into an existing file or create a new one
 - Layout Variants — 1, 2 or 3 spatial variants per screen, same design tokens

@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
   const dsFileKeyMatch = dsLink.match(/figma\.com\/(?:design|file)\/([a-zA-Z0-9]+)/)
   const dsFileKey = dsFileKeyMatch ? dsFileKeyMatch[1] : null
   const generationMode: 'visual' | 'native' = body.generationMode || 'visual'
+  const generateSpecs: boolean = body.generateSpecs || false
 
   // Expand specs by variations: each screen becomes N frames with distinct design direction hints
   const variantHints = [
@@ -91,6 +92,7 @@ ${isNewFile ? `- ALWAYS use planKey: "${figmaTeamId}"` : `- ALWAYS use fileKey: 
 - NEVER ask which team or file — always use the exact keys provided above
 - Name each Figma frame exactly as the screen label above
 - Build a local HTML file per screen, serve with python3 http.server, then capture
+${generateSpecs ? '- Write specifications.md based on SPEC_TEMPLATE.md, then run `npx -y md-to-pdf specifications.md`' : ''}
 `
 
     promptStr = [
@@ -108,8 +110,18 @@ ${isNewFile ? `- ALWAYS use planKey: "${figmaTeamId}"` : `- ALWAYS use fileKey: 
       `  d. ${isNewFile ? `ALWAYS use planKey "${figmaTeamId}"` : `ALWAYS use fileKey "${targetFileKey}"`} — do NOT ask, use this value directly`,
       '  e. Name the frame exactly as the screen label',
       '',
-      'Step 3: Output the Figma file URL and a token audit summary.',
-      '',
+      ...(generateSpecs ? [
+        'Step 3: Functional Specifications Generation',
+        '  a. Read SPEC_TEMPLATE.md in the current directory.',
+        '  b. Write a comprehensive "specifications.md" document reflecting the exact screens and design you created, mapping it accurately to the template structure.',
+        '  c. Run `export PATH=~/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH && npx -y md-to-pdf specifications.md` to generate the PDF version. Wait for it to complete.',
+        '',
+        'Step 4: Output the Figma file URL and a summary.',
+        ''
+      ] : [
+        'Step 3: Output the Figma file URL and a token audit summary.',
+        ''
+      ]),
       `IMPORTANT: Never prompt for team or file selection. Use the exact keys provided.`,
     ].join('\n')
   } else {
@@ -143,6 +155,7 @@ ${unifiedSpec}
 - Use \`figma.createFrame()\` for the root screen. Name it exactly as the screen label.
 - Do NOT hardcode hex colors.
 - Step 3: After executing use_figma successfully for a screen, move on to the next.
+${generateSpecs ? '- Write specifications.md based on SPEC_TEMPLATE.md, then run `npx -y md-to-pdf specifications.md` directly.' : ''}
 `
 
     promptStr = [
@@ -157,8 +170,18 @@ ${unifiedSpec}
       `  a. Write robust JS calling Figma Plugin API (importComponentByKeyAsync, createFrame, etc.)`,
       `  b. Execute it via use_figma on the target file.`,
       '',
-      'Step 3: Output the Figma file URL and a summary.',
-      '',
+      ...(generateSpecs ? [
+        'Step 3: Functional Specifications Generation',
+        '  a. Read SPEC_TEMPLATE.md in the current directory.',
+        '  b. Write a comprehensive "specifications.md" document reflecting the exact screens and design you created, mapping it accurately to the template structure.',
+        '  c. Run `export PATH=~/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH && npx -y md-to-pdf specifications.md` to generate the PDF.',
+        '',
+        'Step 4: Output the Figma file URL and a summary.',
+        ''
+      ] : [
+        'Step 3: Output the Figma file URL and a summary.',
+        ''
+      ]),
       `IMPORTANT: Never prompt for team or file selection. Do everything autonomously.`,
     ].join('\n')
   }
@@ -170,6 +193,13 @@ ${unifiedSpec}
 
   const promptFile = path.join(workDir, 'prompt.txt')
   fs.writeFileSync(promptFile, promptStr, 'utf8')
+
+  if (generateSpecs) {
+    const templatePath = path.join(process.cwd(), 'app/api/generate/SPEC_TEMPLATE.md')
+    if (fs.existsSync(templatePath)) {
+      fs.copyFileSync(templatePath, path.join(workDir, 'SPEC_TEMPLATE.md'))
+    }
+  }
 
   const claudeBin = findClaude()
   const encoder = new TextEncoder()
@@ -192,6 +222,7 @@ ${unifiedSpec}
 
       send('status', `Starting Claude Code — ${specs.length} screen${specs.length > 1 ? 's' : ''}...`)
       send('log', `Claude: ${claudeBin}`)
+      send('init', workDir)
 
       const cmd = `"${claudeBin}" --print --output-format stream-json --verbose --dangerously-skip-permissions < "${promptFile}"`
 
